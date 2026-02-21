@@ -10,7 +10,7 @@ DATABASE_URL = os.getenv(
 
 engine = create_engine(
     DATABASE_URL,
-    echo=True,  # Voir les requêtes SQL dans les logs
+    echo=True,  
     pool_pre_ping=True,
     pool_size=10,
     max_overflow=20
