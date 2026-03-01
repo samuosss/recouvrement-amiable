@@ -1,148 +1,155 @@
-from typing import List, Optional
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
+from typing import List, Optional
+from datetime import datetime
+
 from app.core.database import get_db
-from app.crud.interaction import interaction as crud_interaction
-from app.schemas.interaction import (
-    InteractionCreate, 
-    InteractionUpdate, 
-    InteractionResponse,
-    InteractionStats,
-    TypeInteractionEnum  # CHANGÉ: TypeInteraction → TypeInteractionEnum
-)
+from app.core.security import get_current_active_user
+from app.core.permissions import check_dossier_access, filter_dossiers_by_role
+from app.models.interaction import Interaction, TypeInteractionEnum
+from app.models.dossier_client import DossierClient
+from app.models.utilisateur import Utilisateur
+from app.schemas.interaction import InteractionCreate, InteractionUpdate, InteractionResponse
 
 router = APIRouter()
 
 @router.get("/", response_model=List[InteractionResponse])
-def list_interactions(
-    db: Session = Depends(get_db),
-    skip: int = Query(0, ge=0),
-    limit: int = Query(100, ge=1, le=1000),
-    type_interaction: Optional[TypeInteractionEnum] = None,  # CHANGÉ
-    id_dossier: Optional[int] = None,
-    id_agent: Optional[int] = None
+def get_interactions(
+    skip: int = 0,
+    limit: int = 100,
+    dossier_id: Optional[int] = None,
+    type_interaction: Optional[TypeInteractionEnum] = None,
+    current_user: Utilisateur = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
 ):
-    """Liste toutes les interactions avec filtres"""
-    return crud_interaction.get_multi(
-        db, skip=skip, limit=limit,
-        type_interaction=type_interaction,
-        id_dossier=id_dossier, id_agent=id_agent
+    """
+    Récupérer les interactions selon les permissions
+    
+    Filtrées selon l'accès aux dossiers parents
+    """
+    # Filtrer les dossiers accessibles
+    dossiers_query = db.query(DossierClient.id_dossier)
+    dossiers_query = filter_dossiers_by_role(dossiers_query, current_user, db)
+    dossiers_accessibles = [d.id_dossier for d in dossiers_query.all()]
+    
+    # Query interactions
+    query = db.query(Interaction).filter(
+        Interaction.id_dossier.in_(dossiers_accessibles)
     )
+    
+    if dossier_id:
+        query = query.filter(Interaction.id_dossier == dossier_id)
+    if type_interaction:
+        query = query.filter(Interaction.type_interaction == type_interaction)
+    
+    query = query.order_by(Interaction.date_interaction.desc())
+    
+    return query.offset(skip).limit(limit).all()
+
+@router.get("/{id_interaction}", response_model=InteractionResponse)
+def get_interaction(
+    id_interaction: int,
+    current_user: Utilisateur = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    """Récupérer une interaction par ID"""
+    interaction = db.query(Interaction).filter(
+        Interaction.id_interaction == id_interaction
+    ).first()
+    
+    if not interaction:
+        raise HTTPException(status_code=404, detail="Interaction non trouvée")
+    
+    # Vérifier l'accès au dossier parent
+    check_dossier_access(interaction.id_dossier, current_user, db)
+    
+    return interaction
 
 @router.post("/", response_model=InteractionResponse, status_code=status.HTTP_201_CREATED)
 def create_interaction(
-    *,
-    db: Session = Depends(get_db),
-    interaction_in: InteractionCreate
+    interaction: InteractionCreate,
+    current_user: Utilisateur = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
 ):
     """Créer une nouvelle interaction"""
-    return crud_interaction.create(db, obj_in=interaction_in)
-
-@router.get("/{interaction_id}", response_model=InteractionResponse)
-def get_interaction(
-    *,
-    db: Session = Depends(get_db),
-    interaction_id: int
-):
-    """Obtenir une interaction par ID"""
-    interaction = crud_interaction.get(db, interaction_id=interaction_id)
-    if not interaction:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Interaction non trouvée"
-        )
-    return interaction
-
-@router.put("/{interaction_id}", response_model=InteractionResponse)
-def update_interaction(
-    *,
-    db: Session = Depends(get_db),
-    interaction_id: int,
-    interaction_in: InteractionUpdate
-):
-    """Mettre à jour une interaction"""
-    interaction = crud_interaction.get(db, interaction_id=interaction_id)
-    if not interaction:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Interaction non trouvée"
-        )
-    return crud_interaction.update(db, db_obj=interaction, obj_in=interaction_in)
-
-@router.delete("/{interaction_id}", response_model=InteractionResponse)
-def delete_interaction(
-    *,
-    db: Session = Depends(get_db),
-    interaction_id: int
-):
-    """Supprimer une interaction"""
-    interaction = crud_interaction.get(db, interaction_id=interaction_id)
-    if not interaction:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Interaction non trouvée"
-        )
-    crud_interaction.delete(db, interaction_id=interaction_id)
-    return interaction
-
-@router.get("/dossier/{id_dossier}", response_model=List[InteractionResponse])
-def get_interactions_by_dossier(
-    *,
-    db: Session = Depends(get_db),
-    id_dossier: int
-):
-    """Historique des interactions d'un dossier"""
-    return crud_interaction.get_by_dossier(db, id_dossier=id_dossier)
-
-@router.get("/recent/dernieres")
-def get_recent_interactions(
-    db: Session = Depends(get_db),
-    limit: int = Query(10, ge=1, le=50)
-):
-    """Dernières interactions"""
-    return crud_interaction.get_recent(db, limit=limit)
-
-@router.post("/{interaction_id}/promesse")
-def register_promesse(
-    *,
-    db: Session = Depends(get_db),
-    interaction_id: int,
-    montant: float = Query(..., gt=0),
-    date_promesse: Optional[str] = None
-):
-    """Enregistrer une promesse de paiement"""
-    from datetime import datetime
+    # Vérifier l'accès au dossier
+    check_dossier_access(interaction.id_dossier, current_user, db)
     
-    interaction = crud_interaction.get(db, interaction_id=interaction_id)
-    if not interaction:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Interaction non trouvée"
-        )
-    
-    update_data = {
-        "promesse_paiement": True,
-        "montant_promis": montant
-    }
-    
-    if date_promesse:
-        update_data["date_promesse"] = datetime.fromisoformat(date_promesse)
-    
-    from app.schemas.interaction import InteractionUpdate
-    interaction = crud_interaction.update(
-        db, db_obj=interaction, obj_in=InteractionUpdate(**update_data)
+    # Ajouter l'utilisateur qui crée l'interaction
+    db_interaction = Interaction(
+        **interaction.dict(),
+        id_utilisateur=current_user.id_utilisateur,
+        date_interaction=datetime.now()
     )
     
-    return {
-        "message": "Promesse enregistrée",
-        "montant_promis": montant,
-        "date_promesse": date_promesse
-    }
+    db.add(db_interaction)
+    db.commit()
+    db.refresh(db_interaction)
+    
+    return db_interaction
 
-@router.get("/stats/performance", response_model=InteractionStats)
-def get_interaction_stats(
-    db: Session = Depends(get_db),
-    id_agent: Optional[int] = None
+@router.put("/{id_interaction}", response_model=InteractionResponse)
+def update_interaction(
+    id_interaction: int,
+    interaction_update: InteractionUpdate,
+    current_user: Utilisateur = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
 ):
-    """Stats de performance"""
-    return crud_interaction.get_stats(db, id_agent=id_agent)
+    """Mettre à jour une interaction"""
+    db_interaction = db.query(Interaction).filter(
+        Interaction.id_interaction == id_interaction
+    ).first()
+    
+    if not db_interaction:
+        raise HTTPException(status_code=404, detail="Interaction non trouvée")
+    
+    # Vérifier l'accès au dossier parent
+    check_dossier_access(db_interaction.id_dossier, current_user, db)
+    
+    for field, value in interaction_update.dict(exclude_unset=True).items():
+        setattr(db_interaction, field, value)
+    
+    db.commit()
+    db.refresh(db_interaction)
+    
+    return db_interaction
+
+@router.delete("/{id_interaction}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_interaction(
+    id_interaction: int,
+    current_user: Utilisateur = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    """Supprimer une interaction"""
+    db_interaction = db.query(Interaction).filter(
+        Interaction.id_interaction == id_interaction
+    ).first()
+    
+    if not db_interaction:
+        raise HTTPException(status_code=404, detail="Interaction non trouvée")
+    
+    # Vérifier l'accès au dossier parent
+    check_dossier_access(db_interaction.id_dossier, current_user, db)
+    
+    db.delete(db_interaction)
+    db.commit()
+    
+    return None
+
+@router.get("/dossier/{dossier_id}/historique", response_model=List[InteractionResponse])
+def get_historique_interactions(
+    dossier_id: int,
+    current_user: Utilisateur = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    """Récupérer l'historique des interactions d'un dossier"""
+    # Vérifier l'accès au dossier
+    check_dossier_access(dossier_id, current_user, db)
+    
+    interactions = db.query(Interaction).filter(
+        Interaction.id_dossier == dossier_id
+    ).order_by(
+        Interaction.date_interaction.desc()
+    ).all()
+    
+    return interactions

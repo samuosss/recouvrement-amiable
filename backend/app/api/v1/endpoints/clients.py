@@ -1,131 +1,144 @@
-from typing import List
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
-from loguru import logger
+from typing import List, Optional
 
 from app.core.database import get_db
-from app.crud.client import client as crud_client
+from app.core.security import get_current_active_user
+from app.core.permissions import filter_dossiers_by_role
+from app.models.client import Client
+from app.models.dossier_client import DossierClient
+from app.models.utilisateur import Utilisateur
 from app.schemas.client import ClientCreate, ClientUpdate, ClientResponse
+from app.crud import client as crud_client
 
 router = APIRouter()
 
 @router.get("/", response_model=List[ClientResponse])
 def get_clients(
-    skip: int = Query(0, ge=0),
-    limit: int = Query(100, ge=1, le=100),
+    skip: int = 0,
+    limit: int = 100,
+    search: Optional[str] = None,
+    current_user: Utilisateur = Depends(get_current_active_user),
     db: Session = Depends(get_db)
 ):
-    """Récupérer la liste des clients avec pagination"""
-    try:
-        clients = crud_client.get_multi(db, skip=skip, limit=limit)
-        return clients
-    except Exception as e:
-        logger.error(f"Error getting clients: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-@router.get("/{client_id}", response_model=ClientResponse)
-def get_client(
-    client_id: int,
-    db: Session = Depends(get_db)
-):
-    """Récupérer un client par son ID"""
-    try:
-        client = crud_client.get(db, id=client_id)
-        if not client:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Client avec ID {client_id} non trouvé"
+    """
+    Récupérer les clients selon les permissions
+    
+    Un utilisateur ne voit que les clients ayant des dossiers accessibles
+    """
+    # Récupérer les IDs des dossiers accessibles
+    dossiers_query = db.query(DossierClient.id_client).distinct()
+    dossiers_query = filter_dossiers_by_role(dossiers_query, current_user, db)
+    clients_accessibles = [d.id_client for d in dossiers_query.all()]
+    
+    # Query clients
+    query = db.query(Client).filter(Client.id_client.in_(clients_accessibles))
+    
+    if search:
+        from sqlalchemy import or_
+        query = query.filter(
+            or_(
+                Client.nom.ilike(f"%{search}%"),
+                Client.prenom.ilike(f"%{search}%"),
+                Client.cin.ilike(f"%{search}%"),
+                Client.email.ilike(f"%{search}%")
             )
-        return client
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error getting client {client_id}: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        )
+    
+    return query.offset(skip).limit(limit).all()
+
+@router.get("/{id_client}", response_model=ClientResponse)
+def get_client(
+    id_client: int,
+    current_user: Utilisateur = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    """Récupérer un client par ID"""
+    # Vérifier que l'utilisateur a accès à au moins un dossier de ce client
+    dossiers_query = db.query(DossierClient).filter(
+        DossierClient.id_client == id_client
+    )
+    dossiers_query = filter_dossiers_by_role(dossiers_query, current_user, db)
+    
+    if not dossiers_query.first():
+        raise HTTPException(
+            status_code=403,
+            detail="Vous n'avez pas accès à ce client"
+        )
+    
+    client = crud_client.get_client(db, id_client)
+    
+    if not client:
+        raise HTTPException(status_code=404, detail="Client non trouvé")
+    
+    return client
 
 @router.post("/", response_model=ClientResponse, status_code=status.HTTP_201_CREATED)
 def create_client(
-    client_in: ClientCreate,
+    client: ClientCreate,
+    current_user: Utilisateur = Depends(get_current_active_user),
     db: Session = Depends(get_db)
 ):
     """Créer un nouveau client"""
-    try:
-        # Vérifier si le CIN existe déjà
-        existing_client = crud_client.get_by_cin(db, cin=client_in.cin)
-        if existing_client:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Un client avec le CIN {client_in.cin} existe déjà"
-            )
-        
-        # Créer le client
-        new_client = crud_client.create(db, obj_in=client_in)
-        logger.info(f"Client created: {new_client.id_client}")
-        return new_client
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error creating client: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+    # Vérifier si le CIN existe déjà
+    existing = crud_client.get_client_by_cin(db, client.cin)
+    if existing:
+        raise HTTPException(
+            status_code=400,
+            detail="Un client avec ce CIN existe déjà"
+        )
+    
+    return crud_client.create_client(db, client)
 
-@router.put("/{client_id}", response_model=ClientResponse)
+@router.put("/{id_client}", response_model=ClientResponse)
 def update_client(
-    client_id: int,
-    client_in: ClientUpdate,
+    id_client: int,
+    client_update: ClientUpdate,
+    current_user: Utilisateur = Depends(get_current_active_user),
     db: Session = Depends(get_db)
 ):
     """Mettre à jour un client"""
-    try:
-        client = crud_client.get(db, id=client_id)
-        if not client:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Client avec ID {client_id} non trouvé"
-            )
-        
-        updated_client = crud_client.update(db, db_obj=client, obj_in=client_in)
-        logger.info(f"Client updated: {updated_client.id_client}")
-        return updated_client
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error updating client {client_id}: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+    # Vérifier l'accès
+    dossiers_query = db.query(DossierClient).filter(
+        DossierClient.id_client == id_client
+    )
+    dossiers_query = filter_dossiers_by_role(dossiers_query, current_user, db)
+    
+    if not dossiers_query.first():
+        raise HTTPException(
+            status_code=403,
+            detail="Vous n'avez pas accès à ce client"
+        )
+    
+    db_client = crud_client.update_client(db, id_client, client_update)
+    
+    if not db_client:
+        raise HTTPException(status_code=404, detail="Client non trouvé")
+    
+    return db_client
 
-@router.delete("/{client_id}", status_code=status.HTTP_200_OK)
+@router.delete("/{id_client}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_client(
-    client_id: int,
+    id_client: int,
+    current_user: Utilisateur = Depends(get_current_active_user),
     db: Session = Depends(get_db)
 ):
     """Supprimer un client"""
-    try:
-        client = crud_client.get(db, id=client_id)
-        if not client:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Client avec ID {client_id} non trouvé"
-            )
-        
-        crud_client.delete(db, id=client_id)
-        logger.info(f"Client deleted: {client_id}")
-        return {"message": f"Client {client_id} supprimé avec succès"}
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error deleting client {client_id}: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-@router.get("/search/", response_model=List[ClientResponse])
-def search_clients(
-    q: str = Query(..., min_length=2, description="Terme de recherche"),
-    skip: int = Query(0, ge=0),
-    limit: int = Query(100, ge=1, le=100),
-    db: Session = Depends(get_db)
-):
-    """Rechercher des clients par nom, prénom ou CIN"""
-    try:
-        clients = crud_client.search(db, query=q, skip=skip, limit=limit)
-        return clients
-    except Exception as e:
-        logger.error(f"Error searching clients: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+    # Vérifier l'accès
+    dossiers_query = db.query(DossierClient).filter(
+        DossierClient.id_client == id_client
+    )
+    dossiers_query = filter_dossiers_by_role(dossiers_query, current_user, db)
+    
+    if not dossiers_query.first():
+        raise HTTPException(
+            status_code=403,
+            detail="Vous n'avez pas accès à ce client"
+        )
+    
+    success = crud_client.delete_client(db, id_client)
+    
+    if not success:
+        raise HTTPException(status_code=404, detail="Client non trouvé")
+    
+    return None

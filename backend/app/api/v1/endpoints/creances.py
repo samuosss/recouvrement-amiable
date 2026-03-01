@@ -1,146 +1,157 @@
-from typing import List, Optional
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
+from typing import List, Optional
+from datetime import datetime
+from decimal import Decimal
 from app.core.database import get_db
-from app.crud.creance import creance as crud_creance
-from app.schemas.creance import (
-    CreanceCreate, 
-    CreanceUpdate, 
-    CreanceResponse,
-    CreanceSummary,
-    StatutCreanceEnum  # CHANGÉ: StatutCreance → StatutCreanceEnum
-)
+from app.core.security import get_current_active_user
+from app.core.permissions import check_dossier_access, filter_dossiers_by_role
+from app.models.creance import Creance, StatutCreanceEnum
+from app.models.dossier_client import DossierClient
+from app.models.utilisateur import Utilisateur
+from app.schemas.creance import CreanceCreate, CreanceUpdate, CreanceResponse
 
 router = APIRouter()
 
 @router.get("/", response_model=List[CreanceResponse])
-def list_creances(
-    db: Session = Depends(get_db),
-    skip: int = Query(0, ge=0),
-    limit: int = Query(100, ge=1, le=1000),
-    statut: Optional[StatutCreanceEnum] = None,  # CHANGÉ
-    id_dossier: Optional[int] = None,
-    min_montant: Optional[float] = None,
-    max_montant: Optional[float] = None
+def get_creances(
+    skip: int = 0,
+    limit: int = 100,
+    dossier_id: Optional[int] = None,
+    statut: Optional[StatutCreanceEnum] = None,
+    current_user: Utilisateur = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
 ):
-    """Liste toutes les créances avec filtres"""
-    return crud_creance.get_multi(
-        db, skip=skip, limit=limit, statut=statut,
-        id_dossier=id_dossier, min_montant=min_montant, 
-        max_montant=max_montant
+    """
+    Récupérer les créances selon les permissions
+    
+    Les créances sont filtrées selon l'accès aux dossiers parents
+    """
+    # Filtrer les dossiers accessibles
+    dossiers_query = db.query(DossierClient.id_dossier)
+    dossiers_query = filter_dossiers_by_role(dossiers_query, current_user, db)
+    dossiers_accessibles = [d.id_dossier for d in dossiers_query.all()]
+    
+    # Query créances
+    query = db.query(Creance).filter(
+        Creance.id_dossier.in_(dossiers_accessibles)
     )
+    
+    if dossier_id:
+        query = query.filter(Creance.id_dossier == dossier_id)
+    if statut:
+        query = query.filter(Creance.statut == statut)
+    
+    return query.offset(skip).limit(limit).all()
+
+@router.get("/{id_creance}", response_model=CreanceResponse)
+def get_creance(
+    id_creance: int,
+    current_user: Utilisateur = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    """Récupérer une créance par ID"""
+    creance = db.query(Creance).filter(Creance.id_creance == id_creance).first()
+    
+    if not creance:
+        raise HTTPException(status_code=404, detail="Créance non trouvée")
+    
+    # Vérifier l'accès au dossier parent
+    check_dossier_access(creance.id_dossier, current_user, db)
+    
+    return creance
 
 @router.post("/", response_model=CreanceResponse, status_code=status.HTTP_201_CREATED)
 def create_creance(
-    *,
-    db: Session = Depends(get_db),
-    creance_in: CreanceCreate
+    creance: CreanceCreate,
+    current_user: Utilisateur = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
 ):
     """Créer une nouvelle créance"""
-    existing = crud_creance.get_by_numero_contrat(db, numero_contrat=creance_in.numero_contrat)
-    if existing:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Une créance avec ce numéro de contrat existe déjà"
-        )
-    return crud_creance.create(db, obj_in=creance_in)
+    # Vérifier l'accès au dossier
+    check_dossier_access(creance.id_dossier, current_user, db)
+    
+    db_creance = Creance(**creance.dict())
+    db.add(db_creance)
+    db.commit()
+    db.refresh(db_creance)
+    
+    return db_creance
 
-@router.get("/{creance_id}", response_model=CreanceResponse)
-def get_creance(
-    *,
-    db: Session = Depends(get_db),
-    creance_id: int
-):
-    """Obtenir une créance par ID"""
-    creance = crud_creance.get(db, creance_id=creance_id)
-    if not creance:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Créance non trouvée"
-        )
-    return creance
-
-@router.put("/{creance_id}", response_model=CreanceResponse)
+@router.put("/{id_creance}", response_model=CreanceResponse)
 def update_creance(
-    *,
-    db: Session = Depends(get_db),
-    creance_id: int,
-    creance_in: CreanceUpdate
+    id_creance: int,
+    creance_update: CreanceUpdate,
+    current_user: Utilisateur = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
 ):
     """Mettre à jour une créance"""
-    creance = crud_creance.get(db, creance_id=creance_id)
-    if not creance:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Créance non trouvée"
-        )
-    return crud_creance.update(db, db_obj=creance, obj_in=creance_in)
+    db_creance = db.query(Creance).filter(Creance.id_creance == id_creance).first()
+    
+    if not db_creance:
+        raise HTTPException(status_code=404, detail="Créance non trouvée")
+    
+    # Vérifier l'accès au dossier parent
+    check_dossier_access(db_creance.id_dossier, current_user, db)
+    
+    for field, value in creance_update.dict(exclude_unset=True).items():
+        setattr(db_creance, field, value)
+    
+    db.commit()
+    db.refresh(db_creance)
+    
+    return db_creance
 
-@router.delete("/{creance_id}", response_model=CreanceResponse)
+@router.delete("/{id_creance}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_creance(
-    *,
-    db: Session = Depends(get_db),
-    creance_id: int
+    id_creance: int,
+    current_user: Utilisateur = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
 ):
     """Supprimer une créance"""
-    creance = crud_creance.get(db, creance_id=creance_id)
-    if not creance:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Créance non trouvée"
-        )
-    crud_creance.delete(db, creance_id=creance_id)
-    return creance
+    db_creance = db.query(Creance).filter(Creance.id_creance == id_creance).first()
+    
+    if not db_creance:
+        raise HTTPException(status_code=404, detail="Créance non trouvée")
+    
+    # Vérifier l'accès au dossier parent
+    check_dossier_access(db_creance.id_dossier, current_user, db)
+    
+    db.delete(db_creance)
+    db.commit()
+    
+    return None
 
-@router.post("/{creance_id}/paiement")
-def register_payment(
-    *,
-    db: Session = Depends(get_db),
-    creance_id: int,
-    montant: float = Query(..., gt=0, description="Montant du paiement")
+@router.post("/{id_creance}/paiement")
+def enregistrer_paiement(
+    id_creance: int,
+    montant: float,
+    current_user: Utilisateur = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
 ):
     """Enregistrer un paiement sur une créance"""
-    creance = crud_creance.get(db, creance_id=creance_id)
-    if not creance:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Créance non trouvée"
-        )
+    db_creance = db.query(Creance).filter(Creance.id_creance == id_creance).first()
     
-    nouveau_montant_paye = creance.montant_paye + montant
+    if not db_creance:
+        raise HTTPException(status_code=404, detail="Créance non trouvée")
     
-    if nouveau_montant_paye > creance.montant_initial:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Le montant payé dépasse le montant initial de la créance"
-        )
+    # Vérifier l'accès
+    check_dossier_access(db_creance.id_dossier, current_user, db)
     
-    update_data = {
-        "montant_paye": nouveau_montant_paye,
-        "montant_restant": creance.montant_initial - nouveau_montant_paye,
-        "statut": "Regle" if nouveau_montant_paye >= creance.montant_initial else "PartiellementRegle"
-    }
+    # Mettre à jour le montant payé
+    db_creance.montant_paye = (db_creance.montant_paye or Decimal(0)) + Decimal(str(montant))
+    db_creance.date_dernier_paiement = datetime.now()
     
-    from app.schemas.creance import CreanceUpdate
-    creance = crud_creance.update(db, db_obj=creance, obj_in=CreanceUpdate(**update_data))
+    # Mettre à jour le statut si soldé
+    if db_creance.montant_paye >= db_creance.montant_du:
+        db_creance.statut = StatutCreanceEnum.SOLDEE
+    
+    db.commit()
+    db.refresh(db_creance)
     
     return {
         "message": "Paiement enregistré",
-        "montant_paye": montant,
-        "total_paye": nouveau_montant_paye,
-        "solde_restant": creance.montant_restant,
-        "statut": creance.statut
+        "montant": montant,
+        "nouveau_solde": float(db_creance.montant_paye),
+        "reste_du": float(db_creance.montant_du - db_creance.montant_paye)
     }
-
-@router.get("/stats/summary", response_model=CreanceSummary)
-def get_creances_summary(db: Session = Depends(get_db)):
-    """Résumé global des créances"""
-    return crud_creance.get_summary(db)
-
-@router.get("/retard/en-retard")
-def get_creances_en_retard(
-    db: Session = Depends(get_db),
-    jours: int = Query(30, ge=0)
-):
-    """Créances en retard"""
-    return crud_creance.get_creances_en_retard(db, jours=jours)
