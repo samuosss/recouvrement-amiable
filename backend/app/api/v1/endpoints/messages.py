@@ -1,10 +1,11 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
+from sqlalchemy import func
 from typing import List, Optional
 
 from app.core.database import get_db
 from app.core.security import get_current_active_user
-from app.models.message import TypeMessageEnum, StatutMessageEnum
+from app.models.message import TypeMessageEnum, StatutMessageEnum, Message
 from app.models.utilisateur import Utilisateur
 from app.schemas.message import (
     MessageCreate,
@@ -53,11 +54,7 @@ def create_message(
     current_user: Utilisateur = Depends(get_current_active_user),
     db: Session = Depends(get_db)
 ):
-    """
-    Créer un nouveau message (ajout à la file d'attente)
-    
-    Le message sera traité par les agents automatiques
-    """
+    """Créer un nouveau message (ajout à la file d'attente)"""
     return crud_message.create_message(db, message)
 
 @router.put("/{message_id}", response_model=MessageResponse)
@@ -82,11 +79,7 @@ def get_messages_en_attente(
     current_user: Utilisateur = Depends(get_current_active_user),
     db: Session = Depends(get_db)
 ):
-    """
-    Récupérer les messages en attente d'envoi
-    
-    Utilisé par les agents automatiques pour traiter la file
-    """
+    """Récupérer les messages en attente d'envoi"""
     messages = crud_message.get_messages_en_attente(db, type_message, limite)
     
     return {
@@ -160,8 +153,6 @@ def get_stats_messages(
     db: Session = Depends(get_db)
 ):
     """Statistiques globales des messages"""
-    from sqlalchemy import func
-    
     stats = db.query(
         Message.statut,
         func.count(Message.id_message).label('count')

@@ -2,8 +2,8 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 import os
 from loguru import logger
-from app.core.config import settings
 
+from app.core.config import settings
 from app.api.v1.api import api_router
 
 app = FastAPI(
@@ -13,7 +13,6 @@ app = FastAPI(
     docs_url="/api/docs",
     redoc_url="/api/redoc"
 )
-
 
 # CORS
 allowed_origins = os.getenv("ALLOWED_ORIGINS", "http://localhost:3000").split(",")

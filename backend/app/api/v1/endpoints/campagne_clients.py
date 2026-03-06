@@ -21,7 +21,7 @@ def get_campagnes_clients(
     skip: int = 0,
     limit: int = 100,
     campagne_id: Optional[int] = None,
-    client_id: Optional[int] = None,
+    dossier_id: Optional[int] = None,
     statut: Optional[StatutEnvoiEnum] = None,
     current_user: Utilisateur = Depends(get_current_active_user),
     db: Session = Depends(get_db)
@@ -32,7 +32,7 @@ def get_campagnes_clients(
         skip=skip,
         limit=limit,
         campagne_id=campagne_id,
-        client_id=client_id,
+        dossier_id=dossier_id,
         statut=statut
     )
 
@@ -56,11 +56,7 @@ def create_campagne_client(
     current_user: Utilisateur = Depends(require_manager),
     db: Session = Depends(get_db)
 ):
-    """
-    Ajouter un client à une campagne
-    
-    Permissions: Managers uniquement
-    """
+    """Ajouter un client à une campagne"""
     return crud_campagne_client.create_campagne_client(db, campagne_client)
 
 @router.put("/{campagne_client_id}", response_model=CampagneClientResponse)
@@ -86,7 +82,7 @@ def marquer_envoye(
     current_user: Utilisateur = Depends(get_current_active_user),
     db: Session = Depends(get_db)
 ):
-    """Marquer un message comme envoyé (utilisé par les agents auto)"""
+    """Marquer un message comme envoyé"""
     result = crud_campagne_client.marquer_envoye(db, campagne_client_id)
     
     if not result:
@@ -94,29 +90,56 @@ def marquer_envoye(
     
     return {"message": "Message marqué comme envoyé", "campagne_client_id": campagne_client_id}
 
-@router.post("/{campagne_client_id}/marquer-reussi")
-def marquer_reussi(
+@router.post("/{campagne_client_id}/marquer-delivre")
+def marquer_delivre(
     campagne_client_id: int,
     current_user: Utilisateur = Depends(get_current_active_user),
     db: Session = Depends(get_db)
 ):
-    """Marquer un envoi comme réussi"""
-    result = crud_campagne_client.marquer_reussi(db, campagne_client_id)
+    """Marquer un envoi comme délivré"""
+    result = crud_campagne_client.marquer_delivre(db, campagne_client_id)
     
     if not result:
         raise HTTPException(status_code=404, detail="Liaison non trouvée")
     
-    return {"message": "Envoi marqué comme réussi", "campagne_client_id": campagne_client_id}
+    return {"message": "Envoi marqué comme délivré", "campagne_client_id": campagne_client_id}
+
+@router.post("/{campagne_client_id}/marquer-ouvert")
+def marquer_ouvert(
+    campagne_client_id: int,
+    current_user: Utilisateur = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    """Marquer un envoi comme ouvert"""
+    result = crud_campagne_client.marquer_ouvert(db, campagne_client_id)
+    
+    if not result:
+        raise HTTPException(status_code=404, detail="Liaison non trouvée")
+    
+    return {"message": "Envoi marqué comme ouvert", "campagne_client_id": campagne_client_id}
+
+@router.post("/{campagne_client_id}/marquer-clique")
+def marquer_clique(
+    campagne_client_id: int,
+    current_user: Utilisateur = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    """Marquer un envoi comme cliqué"""
+    result = crud_campagne_client.marquer_clique(db, campagne_client_id)
+    
+    if not result:
+        raise HTTPException(status_code=404, detail="Liaison non trouvée")
+    
+    return {"message": "Envoi marqué comme cliqué", "campagne_client_id": campagne_client_id}
 
 @router.post("/{campagne_client_id}/marquer-echec")
 def marquer_echec(
     campagne_client_id: int,
-    raison: str,
     current_user: Utilisateur = Depends(get_current_active_user),
     db: Session = Depends(get_db)
 ):
     """Marquer un envoi comme échoué"""
-    result = crud_campagne_client.marquer_echec(db, campagne_client_id, raison)
+    result = crud_campagne_client.marquer_echec(db, campagne_client_id)
     
     if not result:
         raise HTTPException(status_code=404, detail="Liaison non trouvée")
@@ -130,11 +153,7 @@ def get_prochains_envois(
     current_user: Utilisateur = Depends(get_current_active_user),
     db: Session = Depends(get_db)
 ):
-    """
-    Récupérer les prochains messages à envoyer pour une campagne
-    
-    Utilisé par les agents automatiques
-    """
+    """Récupérer les prochains messages à envoyer"""
     envois = crud_campagne_client.get_prochains_envois(db, campagne_id, limite)
     
     return {

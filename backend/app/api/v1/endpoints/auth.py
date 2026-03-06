@@ -8,10 +8,10 @@ from app.core.security import (
     authenticate_user,
     create_access_token,
     create_refresh_token,
-    decode_token,
+    decode_access_token,  # ← CORRIGÉ
     get_current_active_user,
-    oauth2_scheme  # ← AJOUTÉ
-
+    blacklist_token,
+    oauth2_scheme
 )
 from app.core.config import settings
 from app.schemas.auth import (
@@ -22,15 +22,8 @@ from app.schemas.auth import (
     UserProfile
 )
 from app.models.utilisateur import Utilisateur
-from app.core.token_blacklist import blacklist_token  # ← AJOUTÉ
-from app.core.token_blacklist import revoke_all_user_tokens
-
 
 router = APIRouter()
-
-# ========================
-# ENDPOINT OAUTH2 POUR SWAGGER
-# ========================
 
 @router.post("/login", response_model=Token)
 def login_oauth2(
@@ -43,10 +36,7 @@ def login_oauth2(
     **IMPORTANT pour Swagger:**
     - Username = votre email
     - Password = votre mot de passe
-    
-    Retourne uniquement les tokens (format OAuth2 standard)
     """
-    # OAuth2 utilise "username" mais nous utilisons "email"
     user = authenticate_user(db, form_data.username, form_data.password)
     
     if not user:
@@ -59,37 +49,20 @@ def login_oauth2(
     if not user.actif:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Compte désactivé. Contactez l'administrateur.",
+            detail="Compte désactivé",
         )
     
-    # Créer les tokens
     access_token = create_access_token(
         data={
-            "sub": user.id_utilisateur,
-            "email": user.email,
+            "sub": user.email,
             "role": user.role.value,
-            "agence_id": user.id_agence
+            "user_id": user.id_utilisateur
         }
     )
     
     refresh_token = create_refresh_token(
-        data={"sub": user.id_utilisateur}
+        data={"sub": user.email}
     )
-    
-    # Traçabilité (optionnel)
-    from app.models.tracabilite import Tracabilite, ActionEnum
-    from datetime import datetime
-    
-    trace = Tracabilite(
-        table_cible="utilisateurs",
-        id_enregistrement=user.id_utilisateur,
-        action=ActionEnum.CONSULTATION,
-        id_utilisateur=user.id_utilisateur,
-        date_action=datetime.now(),
-        description=f"Connexion OAuth2: {user.email}"
-    )
-    db.add(trace)
-    db.commit()
     
     return Token(
         access_token=access_token,
@@ -97,19 +70,13 @@ def login_oauth2(
         token_type="bearer"
     )
 
-# ========================
-# ENDPOINT JSON ALTERNATIF (optionnel)
-# ========================
-
 @router.post("/login-json", response_model=LoginResponse)
 def login_json(
     login_data: LoginRequest,
     db: Session = Depends(get_db)
 ):
     """
-    Login avec JSON (alternative au formulaire OAuth2)
-    
-    Retourne les tokens + informations utilisateur
+    Login avec JSON
     """
     user = authenticate_user(db, login_data.email, login_data.password)
     
@@ -117,27 +84,24 @@ def login_json(
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Email ou mot de passe incorrect",
-            headers={"WWW-Authenticate": "Bearer"},
         )
     
     if not user.actif:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Compte désactivé. Contactez l'administrateur.",
+            detail="Compte désactivé",
         )
     
-    # Créer les tokens
     access_token = create_access_token(
         data={
-            "sub": user.id_utilisateur,
-            "email": user.email,
+            "sub": user.email,
             "role": user.role.value,
-            "agence_id": user.id_agence
+            "user_id": user.id_utilisateur
         }
     )
     
     refresh_token = create_refresh_token(
-        data={"sub": user.id_utilisateur}
+        data={"sub": user.email}
     )
     
     return LoginResponse(
@@ -153,45 +117,42 @@ def refresh_token(
     db: Session = Depends(get_db)
 ):
     """
-    Rafraîchir un access token avec un refresh token
+    Rafraîchir un access token
     """
     try:
-        payload = decode_token(refresh_data.refresh_token)
+        payload = decode_access_token(refresh_data.refresh_token)
         
-        if payload.get("type") != "refresh":
+        if not payload:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Token invalide"
             )
         
-        user_id = payload.get("sub")
-        if user_id is None:
+        email = payload.get("sub")
+        if not email:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Token invalide"
             )
         
-        user = db.query(Utilisateur).filter(
-            Utilisateur.id_utilisateur == user_id
-        ).first()
+        user = db.query(Utilisateur).filter(Utilisateur.email == email).first()
         
         if not user or not user.actif:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Utilisateur invalide ou inactif"
+                detail="Utilisateur invalide"
             )
         
         new_access_token = create_access_token(
             data={
-                "sub": user.id_utilisateur,
-                "email": user.email,
+                "sub": user.email,
                 "role": user.role.value,
-                "agence_id": user.id_agence
+                "user_id": user.id_utilisateur
             }
         )
         
         new_refresh_token = create_refresh_token(
-            data={"sub": user.id_utilisateur}
+            data={"sub": user.email}
         )
         
         return Token(
@@ -200,8 +161,6 @@ def refresh_token(
             token_type="bearer"
         )
         
-    except HTTPException:
-        raise
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -213,95 +172,21 @@ def get_current_user_profile(
     current_user: Utilisateur = Depends(get_current_active_user)
 ):
     """
-    Récupérer le profil de l'utilisateur actuellement connecté
+    Récupérer le profil de l'utilisateur connecté
     """
     return UserProfile.from_orm(current_user)
 
 @router.post("/logout")
 def logout(
-    token: str = Depends(oauth2_scheme),  # ← AJOUTÉ : récupérer le token
-    current_user: Utilisateur = Depends(get_current_active_user),
-    db: Session = Depends(get_db)
+    token: str = Depends(oauth2_scheme),
+    current_user: Utilisateur = Depends(get_current_active_user)
 ):
     """
-    Déconnecter l'utilisateur et révoquer le token
+    Déconnecter l'utilisateur
     """
-    try:
-        # Décoder le token pour obtenir l'expiration
-        payload = decode_token(token)
-        exp = payload.get("exp")
-        
-        if exp:
-            import time
-            current_time = int(time.time())
-            expires_in = exp - current_time
-            
-            if expires_in > 0:
-                # Blacklister le token
-                success = blacklist_token(token, expires_in)
-                
-                if not success:
-                    print("❌ Échec du blacklist, mais logout enregistré")
-        
-        # Traçabilité
-        from app.models.tracabilite import Tracabilite, ActionEnum
-        from datetime import datetime
-        
-        trace = Tracabilite(
-            table_cible="utilisateurs",
-            id_enregistrement=current_user.id_utilisateur,
-            action=ActionEnum.CONSULTATION,
-            id_utilisateur=current_user.id_utilisateur,
-            date_action=datetime.now(),
-            description=f"Déconnexion: {current_user.email}"
-        )
-        db.add(trace)
-        db.commit()
-        
-        return {
-            "message": "Déconnexion réussie",
-            "detail": "Votre token a été révoqué"
-        }
-        
-    except Exception as e:
-        print(f"❌ Erreur logout: {e}")
-        return {"message": "Déconnexion réussie"}
+    blacklist_token(token)
     
-@router.post("/logout-all")
-def logout_all_devices(
-    current_user: Utilisateur = Depends(get_current_active_user),
-    db: Session = Depends(get_db)
-):
-    """
-    Déconnecter l'utilisateur de TOUS ses appareils
-    
-    Utile en cas de :
-    - Changement de mot de passe
-    - Compromission de sécurité
-    """
-    success = revoke_all_user_tokens(current_user.id_utilisateur)
-    
-    if success:
-        from app.models.tracabilite import Tracabilite, ActionEnum
-        from datetime import datetime
-        
-        trace = Tracabilite(
-            table_cible="utilisateurs",
-            id_enregistrement=current_user.id_utilisateur,
-            action=ActionEnum.MODIFICATION,
-            id_utilisateur=current_user.id_utilisateur,
-            date_action=datetime.now(),
-            description=f"Déconnexion globale (tous appareils): {current_user.email}"
-        )
-        db.add(trace)
-        db.commit()
-        
-        return {
-            "message": "Déconnexion réussie sur tous les appareils",
-            "detail": "Tous vos tokens ont été révoqués"
-        }
-    else:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Erreur lors de la révocation des tokens"
-        )
+    return {
+        "message": "Déconnexion réussie",
+        "detail": "Votre token a été révoqué"
+    }

@@ -12,7 +12,10 @@ from app.api.v1.endpoints import (
     templates,
     campagnes,
     campagne_clients,
-    messages
+    messages,
+    agents_auto,
+    alertes, 
+    tracabilite
 )
 
 api_router = APIRouter()
@@ -33,4 +36,7 @@ api_router.include_router(templates.router, prefix="/templates", tags=["template
 api_router.include_router(campagnes.router, prefix="/campagnes", tags=["campagnes"])
 api_router.include_router(campagne_clients.router, prefix="/campagne-clients", tags=["campagne-clients"])
 api_router.include_router(messages.router, prefix="/messages", tags=["messages"])
+api_router.include_router(agents_auto.router, prefix="/agents-auto", tags=["agents-auto"])
+api_router.include_router(alertes.router, prefix="/alertes", tags=["alertes"])
+api_router.include_router(tracabilite.router, prefix="/tracabilite", tags=["tracabilite"])  
     

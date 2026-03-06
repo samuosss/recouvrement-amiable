@@ -5,16 +5,19 @@ from enum import Enum
 
 # Enums qui correspondent EXACTEMENT à vos données DB
 class StatutDossier(str, Enum):
-    ACTIF = "Actif"
-    EN_COURS = "En cours"
-    CLOTURE = "Clôturé"
-    ARCHIVE = "Archivé"
+    ACTIF       = "Actif"
+    CLOTURE     = "Cloture"       # matches DB
+    SUSPENDU    = "Suspendu"      # matches DB
+    EN_LITIGE   = "EnLitige"      # matches DB
 
 class PrioriteDossier(str, Enum):
-    CRITIQUE = "Critique"
-    HAUTE = "Haute"
-    NORMALE = "Normale"
     BASSE = "Basse"
+    NORMALE = "Normale"
+    HAUTE = "Haute"
+    CRITIQUE = "Critique"
+    
+    
+    
 
 class DossierBase(BaseModel):
     numero_dossier: str
