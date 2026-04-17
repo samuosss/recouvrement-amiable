@@ -1,6 +1,8 @@
 version: '3.8'
 
 services:
+
+  # ── Base de données PostgreSQL ─────────────────────────────────────────────
   postgres:
     image: postgres:15-alpine
     container_name: recouvrement_db
@@ -21,6 +23,7 @@ services:
       timeout: 5s
       retries: 5
 
+  # ── Cache Redis ────────────────────────────────────────────────────────────
   redis:
     image: redis:7-alpine
     container_name: recouvrement_redis
@@ -37,6 +40,7 @@ services:
       timeout: 5s
       retries: 5
 
+  # ── API FastAPI principale ─────────────────────────────────────────────────
   fastapi:
     build:
       context: .
@@ -47,10 +51,15 @@ services:
       - "8000:8000"
     env_file:
       - .env
+    environment:
+      # URL interne du service NLP (réseau Docker)
+      SENTIMENT_SERVICE_URL: http://sentiment:8001
     depends_on:
       postgres:
         condition: service_healthy
       redis:
+        condition: service_healthy
+      sentiment:
         condition: service_healthy
     volumes:
       - ./app:/app/app
@@ -58,6 +67,33 @@ services:
     networks:
       - recouvrement_network
 
+  # ── Service NLP Sentiment ──────────────────────────────────────────────────
+  sentiment:
+    build:
+      context: .
+      dockerfile: Dockerfile.sentiment
+    container_name: recouvrement_sentiment
+    restart: unless-stopped
+    ports:
+      - "8001:8001"
+    # Le modèle HuggingFace est mis en cache dans un volume
+    # pour ne pas le re-télécharger à chaque rebuild
+    volumes:
+      - huggingface_cache:/root/.cache/huggingface
+    deploy:
+      resources:
+        limits:
+          memory: 2g
+    networks:
+      - recouvrement_network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  # ── PgAdmin ────────────────────────────────────────────────────────────────
   pgadmin:
     image: dpage/pgadmin4:latest
     container_name: recouvrement_pgadmin
@@ -79,6 +115,7 @@ volumes:
   postgres_data:
   redis_data:
   pgadmin_data:
+  huggingface_cache:   # cache modèle HF persistant entre les rebuilds
 
 networks:
   recouvrement_network:

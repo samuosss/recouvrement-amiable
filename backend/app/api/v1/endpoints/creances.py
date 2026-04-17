@@ -129,22 +129,30 @@ def enregistrer_paiement(
     current_user: Utilisateur = Depends(get_current_active_user),
     db: Session = Depends(get_db)
 ):
-    """Enregistrer un paiement sur une créance"""
     db_creance = db.query(Creance).filter(Creance.id_creance == id_creance).first()
     
     if not db_creance:
         raise HTTPException(status_code=404, detail="Créance non trouvée")
     
-    # Vérifier l'accès
     check_dossier_access(db_creance.id_dossier, current_user, db)
     
-    # Mettre à jour le montant payé
-    db_creance.montant_paye = (db_creance.montant_paye or Decimal(0)) + Decimal(str(montant))
+    montant_paye_actuel = Decimal(str(db_creance.montant_paye or 0))
+    montant_initial     = Decimal(str(db_creance.montant_initial or 0))
+    nouveau_paye        = montant_paye_actuel + Decimal(str(montant))
+    
+    # Clamp — can't overpay
+    if nouveau_paye > montant_initial:
+        nouveau_paye = montant_initial
+
+    db_creance.montant_paye    = nouveau_paye
+    db_creance.montant_restant = montant_initial - nouveau_paye
     db_creance.date_dernier_paiement = datetime.now()
     
-    # Mettre à jour le statut si soldé
-    if db_creance.montant_paye >= db_creance.montant_du:
-        db_creance.statut = StatutCreanceEnum.SOLDEE
+    # Update statut
+    if nouveau_paye >= montant_initial:
+        db_creance.statut = StatutCreanceEnum.REGLE
+    elif nouveau_paye > 0:
+        db_creance.statut = StatutCreanceEnum.PARTIELLEMENT_REGLE
     
     db.commit()
     db.refresh(db_creance)
@@ -152,6 +160,6 @@ def enregistrer_paiement(
     return {
         "message": "Paiement enregistré",
         "montant": montant,
-        "nouveau_solde": float(db_creance.montant_paye),
-        "reste_du": float(db_creance.montant_du - db_creance.montant_paye)
+        "montant_paye": float(nouveau_paye),
+        "montant_restant": float(db_creance.montant_restant),
     }

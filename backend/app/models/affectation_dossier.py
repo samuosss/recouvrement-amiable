@@ -22,3 +22,4 @@ class AffectationDossier(Base, TimestampMixin):
     
     def __repr__(self):
         return f"<AffectationDossier(id={self.id_affectation}, dossier_id={self.id_dossier}, agent_id={self.id_agent})>"
+    

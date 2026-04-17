@@ -15,7 +15,12 @@ from app.api.v1.endpoints import (
     messages,
     agents_auto,
     alertes, 
-    tracabilite
+    tracabilite,
+    dashboard,
+    reponses_clients,
+    comites,
+    nlp,
+    analytics
 )
 
 api_router = APIRouter()
@@ -39,4 +44,9 @@ api_router.include_router(messages.router, prefix="/messages", tags=["messages"]
 api_router.include_router(agents_auto.router, prefix="/agents-auto", tags=["agents-auto"])
 api_router.include_router(alertes.router, prefix="/alertes", tags=["alertes"])
 api_router.include_router(tracabilite.router, prefix="/tracabilite", tags=["tracabilite"])  
+api_router.include_router(dashboard.router, prefix="/dashboard", tags=["dashboard"])
+api_router.include_router(reponses_clients.router, prefix="/reponses-clients", tags=["réponses clients"])
+api_router.include_router(comites.router, prefix="/comites", tags=["comités"])
+api_router.include_router(nlp.router, prefix="/nlp", tags=["NLP"])
+api_router.include_router(analytics.router, prefix="/analytics", tags=["analytics"])
     

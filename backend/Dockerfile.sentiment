@@ -1,0 +1,36 @@
+FROM python:3.11-slim
+
+WORKDIR /app
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    # Cache HuggingFace dans le volume Docker
+    HF_HOME=/root/.cache/huggingface \
+    TRANSFORMERS_CACHE=/root/.cache/huggingface
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends curl \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY requirements.sentiment.txt .
+RUN pip install --upgrade pip \
+    && pip install -r requirements.sentiment.txt
+
+# Pré-télécharger le modèle pendant le build
+# (mis en cache dans le volume huggingface_cache si monté)
+RUN python -c "\
+from transformers import AutoTokenizer, AutoModelForSequenceClassification; \
+AutoTokenizer.from_pretrained('tabularisai/multilingual-sentiment-analysis'); \
+AutoModelForSequenceClassification.from_pretrained('tabularisai/multilingual-sentiment-analysis'); \
+print('[OK] Modèle téléchargé')"
+
+COPY app/services/sentiment_service.py .
+
+EXPOSE 8001
+
+HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
+  CMD curl -f http://localhost:8001/health || exit 1
+
+CMD ["uvicorn", "sentiment_service:app", "--host", "0.0.0.0", "--port", "8001"]

@@ -29,7 +29,8 @@ def get_campagnes(
 
 def create_campagne(
     db: Session,
-    campagne: CampagneCreate
+    campagne: CampagneCreate,
+    created_by: int = None
 ) -> Campagne:
     db_campagne = Campagne(
         **campagne.dict(),
@@ -71,15 +72,6 @@ def delete_campagne(db: Session, campagne_id: int) -> bool:
     return True
 
 def get_dossiers_cibles(db: Session, criteres: dict) -> List[int]:
-    """
-    Récupérer les IDs des dossiers correspondant aux critères
-    
-    Critères supportés:
-    - statut: ["Actif", "Suspendu"]
-    - priorite: ["Haute", "Moyenne"]
-    - montant_min: 5000
-    - montant_max: 50000
-    """
     query = db.query(DossierClient.id_dossier).distinct()
     
     if "statut" in criteres:
@@ -99,7 +91,6 @@ def get_dossiers_cibles(db: Session, criteres: dict) -> List[int]:
     return [d.id_dossier for d in query.all()]
 
 def lancer_campagne(db: Session, campagne_id: int) -> dict:
-    """Lancer une campagne : créer les entrées CampagneClient"""
     campagne = get_campagne(db, campagne_id)
     
     if not campagne:
@@ -108,18 +99,15 @@ def lancer_campagne(db: Session, campagne_id: int) -> dict:
     if campagne.statut != StatutCampagneEnum.PLANIFIEE:
         return {"success": False, "message": "La campagne doit être planifiée"}
     
-    # Récupérer les dossiers cibles
     dossiers_ids = get_dossiers_cibles(db, campagne.criteres_segmentation)
     
     if not dossiers_ids:
-        return {"success": False, "message": "Aucun dossier ne correspond"}
+        return {"success": False, "message": "Aucun dossier ne correspond aux critères"}
     
-    # Déterminer le canal selon le type
     canal = "SMS" if campagne.type == TypeCampagneEnum.SMS else "Email"
     if campagne.type == TypeCampagneEnum.MIXTE:
         canal = "MIXTE"
     
-    # Créer les entrées CampagneClient
     for dossier_id in dossiers_ids:
         campagne_client = CampagneClient(
             id_campagne=campagne_id,
@@ -129,7 +117,6 @@ def lancer_campagne(db: Session, campagne_id: int) -> dict:
         )
         db.add(campagne_client)
     
-    # Mettre à jour
     campagne.statut = StatutCampagneEnum.EN_COURS
     campagne.nombre_cibles = len(dossiers_ids)
     
@@ -143,7 +130,6 @@ def lancer_campagne(db: Session, campagne_id: int) -> dict:
     }
 
 def get_campagne_stats(db: Session, campagne_id: int) -> dict:
-    """Statistiques détaillées"""
     stats = db.query(
         CampagneClient.statut,
         func.count(CampagneClient.id).label('count')

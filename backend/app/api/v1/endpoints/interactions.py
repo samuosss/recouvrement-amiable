@@ -71,21 +71,16 @@ def create_interaction(
     current_user: Utilisateur = Depends(get_current_active_user),
     db: Session = Depends(get_db)
 ):
-    """Créer une nouvelle interaction"""
-    # Vérifier l'accès au dossier
     check_dossier_access(interaction.id_dossier, current_user, db)
     
-    # Ajouter l'utilisateur qui crée l'interaction
-    db_interaction = Interaction(
-        **interaction.dict(),
-        id_utilisateur=current_user.id_utilisateur,
-        date_interaction=datetime.now()
-    )
+    interaction_data = interaction.dict()
+    interaction_data["id_agent"] = current_user.id_utilisateur  # overwrite
+    interaction_data["date_interaction"] = datetime.now()       # overwrite
     
+    db_interaction = Interaction(**interaction_data)
     db.add(db_interaction)
     db.commit()
     db.refresh(db_interaction)
-    
     return db_interaction
 
 @router.put("/{id_interaction}", response_model=InteractionResponse)

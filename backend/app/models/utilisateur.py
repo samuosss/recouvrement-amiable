@@ -18,14 +18,16 @@ class Utilisateur(Base, TimestampMixin):
     nom = Column(String(100), nullable=False)
     prenom = Column(String(100), nullable=False)
     email = Column(String(100), nullable=False, unique=True, index=True)
-    mot_de_passe = Column(String(255), nullable=False)  # Hash bcrypt
+    mot_de_passe = Column(String(255), nullable=False)
     role = Column(Enum(RoleEnum), nullable=False, default=RoleEnum.AGENT)
     telephone = Column(String(20))
     id_agence = Column(Integer, ForeignKey("agences.id_agence"))
+    id_region = Column(Integer, ForeignKey("regions.id_region"), nullable=True)  # ✅ AJOUTÉ
     actif = Column(Boolean, default=True, nullable=False)
     
     # Relations
     agence = relationship("Agence", backref="utilisateurs")
+    region = relationship("Region", backref="utilisateurs")  # ✅ AJOUTÉ
     
     def __repr__(self):
         return f"<Utilisateur(id={self.id_utilisateur}, nom='{self.nom} {self.prenom}', role='{self.role}')>"

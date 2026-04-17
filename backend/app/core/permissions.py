@@ -6,7 +6,7 @@ Gère le contrôle d'accès basé sur les rôles (RBAC) pour le système de reco
 Hiérarchie des rôles (du plus restreint au plus large) :
     1. Agent          : Accès à ses dossiers uniquement
     2. Chef d'Agence  : Accès aux dossiers de son agence
-    3. Chef Régional  : Accès aux dossiers de sa région
+    3. Chef Régional  : Accès aux dossiers de sa région (basé sur id_region)
     4. DGA            : Accès à tous les dossiers
     5. Admin          : Accès complet (données + configuration)
 """
@@ -21,6 +21,7 @@ from app.models.utilisateur import Utilisateur, RoleEnum
 from app.models.dossier_client import DossierClient
 from app.models.affectation_dossier import AffectationDossier
 from app.models.agence import Agence
+from app.models.client import Client
 
 # ========================
 # VÉRIFICATION DE RÔLES
@@ -34,12 +35,6 @@ def require_roles(allowed_roles: List[RoleEnum]):
         @router.get("/admin-only")
         def admin_endpoint(user = Depends(require_roles([RoleEnum.ADMIN]))):
             ...
-    
-    Args:
-        allowed_roles: Liste des rôles autorisés
-        
-    Returns:
-        Dependency function pour FastAPI
     """
     async def role_checker(
         current_user: Utilisateur = Depends(get_current_active_user)
@@ -107,16 +102,8 @@ def filter_dossiers_by_role(
     Logique:
         - Agent: Dossiers où il est agent actif
         - Chef d'Agence: Dossiers des agents de son agence
-        - Chef Régional: Dossiers des agents de sa région
+        - Chef Régional: Dossiers des agents de sa région (basé sur id_region)
         - DGA/Admin: Tous les dossiers
-    
-    Args:
-        query: Query SQLAlchemy sur DossierClient
-        user: Utilisateur connecté
-        db: Session database
-        
-    Returns:
-        Query filtrée selon les permissions
     """
     
     # DGA et Admin : Accès à tout
@@ -134,7 +121,8 @@ def filter_dossiers_by_role(
     if user.role == RoleEnum.CHEF_AGENCE:
         # Sous-requête : agents de son agence
         agents_agence = db.query(Utilisateur.id_utilisateur).filter(
-            Utilisateur.id_agence == user.id_agence
+            Utilisateur.id_agence == user.id_agence,
+            Utilisateur.actif == True
         ).subquery()
         
         return query.join(AffectationDossier).filter(
@@ -142,25 +130,22 @@ def filter_dossiers_by_role(
             AffectationDossier.actif == True
         )
     
-    # Chef Régional : Dossiers des agents de sa région
+    # Chef Régional : Dossiers des agents de sa région (utilise id_region)
     if user.role == RoleEnum.CHEF_REGIONAL:
-        # Récupérer la région de l'utilisateur
-        user_agence = db.query(Agence).filter(
-            Agence.id_agence == user.id_agence
-        ).first()
-        
-        if not user_agence:
-            # Si pas d'agence, pas de dossiers
+        # ✅ CORRIGÉ : Utiliser id_region directement
+        if not user.id_region:
             return query.filter(False)
         
-        # Sous-requête : agences de sa région
+        # Récupérer les agences de sa région
         agences_region = db.query(Agence.id_agence).filter(
-            Agence.id_region == user_agence.id_region
+            Agence.id_region == user.id_region
         ).subquery()
         
-        # Sous-requête : agents des agences de sa région
+        # Récupérer les agents de ces agences
         agents_region = db.query(Utilisateur.id_utilisateur).filter(
-            Utilisateur.id_agence.in_(agences_region)
+            Utilisateur.id_agence.in_(agences_region),
+            Utilisateur.role == RoleEnum.AGENT,
+            Utilisateur.actif == True
         ).subquery()
         
         return query.join(AffectationDossier).filter(
@@ -168,7 +153,6 @@ def filter_dossiers_by_role(
             AffectationDossier.actif == True
         )
     
-    # Fallback : pas d'accès
     return query.filter(False)
 
 # ========================
@@ -182,18 +166,6 @@ def check_dossier_access(
 ) -> bool:
     """
     Vérifier si un utilisateur a accès à un dossier spécifique
-    
-    Args:
-        dossier_id: ID du dossier
-        user: Utilisateur connecté
-        db: Session database
-        
-    Returns:
-        True si l'utilisateur a accès
-        
-    Raises:
-        HTTPException 403 si accès refusé
-        HTTPException 404 si dossier non trouvé
     """
     
     # Vérifier que le dossier existe
@@ -247,6 +219,13 @@ def check_dossier_access(
     
     # Chef Régional : Vérifier que l'agence de l'agent est dans sa région
     if user.role == RoleEnum.CHEF_REGIONAL:
+        # ✅ CORRIGÉ : Utiliser id_region directement
+        if not user.id_region:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Votre région n'est pas configurée"
+            )
+        
         agent = db.query(Utilisateur).filter(
             Utilisateur.id_utilisateur == affectation.id_agent
         ).first()
@@ -261,24 +240,19 @@ def check_dossier_access(
             Agence.id_agence == agent.id_agence
         ).first()
         
-        user_agence = db.query(Agence).filter(
-            Agence.id_agence == user.id_agence
-        ).first()
-        
-        if not agent_agence or not user_agence:
+        if not agent_agence:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail="Agence non trouvée"
+                detail="Agence de l'agent non trouvée"
             )
         
-        if agent_agence.id_region != user_agence.id_region:
+        if agent_agence.id_region != user.id_region:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Ce dossier n'appartient pas à votre région"
             )
         return True
     
-    # Fallback
     raise HTTPException(
         status_code=status.HTTP_403_FORBIDDEN,
         detail="Accès refusé"
@@ -314,20 +288,20 @@ def filter_utilisateurs_by_role(
     if user.role == RoleEnum.CHEF_AGENCE:
         return query.filter(Utilisateur.id_agence == user.id_agence)
     
-    # Chef Régional : Utilisateurs de sa région
+    # Chef Régional : Utilisateurs de sa région (basé sur id_region)
     if user.role == RoleEnum.CHEF_REGIONAL:
-        user_agence = db.query(Agence).filter(
-            Agence.id_agence == user.id_agence
-        ).first()
-        
-        if not user_agence:
+        # ✅ CORRIGÉ : Utiliser id_region directement
+        if not user.id_region:
             return query.filter(False)
         
+        # Récupérer les agences de sa région
         agences_region = db.query(Agence.id_agence).filter(
-            Agence.id_region == user_agence.id_region
+            Agence.id_region == user.id_region
         ).subquery()
         
-        return query.filter(Utilisateur.id_agence.in_(agences_region))
+        return query.filter(
+            Utilisateur.id_agence.in_(agences_region)
+        )
     
     return query.filter(False)
 
@@ -342,13 +316,6 @@ def can_modify_user(
 ) -> bool:
     """
     Vérifier si un utilisateur peut modifier un autre utilisateur
-    
-    Règles:
-        - Admin: Peut modifier tout le monde
-        - DGA: Peut modifier sauf Admin
-        - Chef Régional: Peut modifier dans sa région (sauf DGA/Admin)
-        - Chef Agence: Peut modifier dans son agence (sauf DGA/Admin/Chef Regional)
-        - Agent: Ne peut modifier personne
     """
     
     # Admin peut tout
@@ -374,26 +341,23 @@ def can_modify_user(
         if target_user.role in [RoleEnum.DGA, RoleEnum.ADMIN]:
             return False
         
-        current_agence = db.query(Agence).filter(
-            Agence.id_agence == current_user.id_agence
-        ).first()
+        if not current_user.id_region:
+            return False
         
         target_agence = db.query(Agence).filter(
             Agence.id_agence == target_user.id_agence
         ).first()
         
-        if not current_agence or not target_agence:
+        if not target_agence:
             return False
         
-        return current_agence.id_region == target_agence.id_region
+        return target_agence.id_region == current_user.id_region
     
     return False
 
 def get_user_scope_summary(user: Utilisateur, db: Session) -> dict:
     """
     Obtenir un résumé de la portée d'accès d'un utilisateur
-    
-    Utile pour afficher dans le frontend les limites de l'utilisateur
     """
     
     if user.role in [RoleEnum.DGA, RoleEnum.ADMIN]:
@@ -404,20 +368,17 @@ def get_user_scope_summary(user: Utilisateur, db: Session) -> dict:
         }
     
     if user.role == RoleEnum.CHEF_REGIONAL:
-        user_agence = db.query(Agence).filter(
-            Agence.id_agence == user.id_agence
-        ).first()
-        
-        if user_agence:
+        # ✅ CORRIGÉ : Utiliser id_region directement
+        if user.id_region:
             from app.models.region import Region
             region = db.query(Region).filter(
-                Region.id_region == user_agence.id_region
+                Region.id_region == user.id_region
             ).first()
             
             return {
                 "role": user.role.value,
                 "scope": "region",
-                "region_id": user_agence.id_region,
+                "region_id": user.id_region,
                 "region_nom": region.nom_region if region else "Inconnue",
                 "description": f"Accès aux données de la région {region.nom_region if region else ''}"
             }

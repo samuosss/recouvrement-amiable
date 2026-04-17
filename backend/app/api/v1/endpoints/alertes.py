@@ -173,3 +173,17 @@ def get_stats_alertes(
     
     stats = crud_alerte.get_stats_alertes(db, utilisateur_id)
     return AlerteStats(**stats)
+
+@router.get("/count/non-lues")
+def count_alertes_non_lues(
+    current_user: Utilisateur = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    """Nombre d'alertes non lues — pour la notification bell"""
+    utilisateur_id = current_user.id_utilisateur if current_user.role == "Agent" else None
+    alertes = crud_alerte.get_alertes_non_lues(db, utilisateur_id)
+    critiques = [a for a in alertes if a.niveau.value == "Critique"]
+    return {
+        "total": len(alertes),
+        "critiques": len(critiques)
+    }

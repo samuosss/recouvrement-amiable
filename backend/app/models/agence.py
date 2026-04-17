@@ -12,6 +12,9 @@ class Agence(Base, TimestampMixin):
     adresse = Column(String(255))
     telephone = Column(String(20))
     email = Column(String(100))
+      
+    latitude = Column(Float, nullable=True)
+    longitude = Column(Float, nullable=True)
     id_region = Column(Integer, ForeignKey("regions.id_region"), nullable=False)
     
     # Relations

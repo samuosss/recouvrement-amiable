@@ -9,6 +9,9 @@ class AgenceBase(BaseModel):
     telephone: Optional[str] = None
     email: Optional[EmailStr] = None
     id_region: int
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
+
 
 class AgenceCreate(AgenceBase):
     pass
@@ -20,6 +23,8 @@ class AgenceUpdate(BaseModel):
     telephone: Optional[str] = None
     email: Optional[EmailStr] = None
     id_region: Optional[int] = None
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
 
 class AgenceResponse(AgenceBase):
     id_agence: int
