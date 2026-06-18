@@ -25,7 +25,9 @@ class ClientUpdate(BaseModel):
     email: Optional[EmailStr] = None
     adresse: Optional[str] = None
     ville: Optional[str] = None
+    code_postal: Optional[str] = None        # ← was missing
     profession: Optional[str] = None
+    situation_familiale: Optional[str] = None  # ← was missing
 
 class ClientResponse(ClientBase):
     id_client: int

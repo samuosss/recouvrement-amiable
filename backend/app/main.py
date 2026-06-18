@@ -5,6 +5,8 @@ from loguru import logger
 
 from app.core.config import settings
 from app.api.v1.api import api_router
+from app.agents.scheduler import start_scheduler, stop_scheduler
+from app.api.v1.endpoints.dispatch import router as dispatch_router
 from app.models import comite  # add to imports
 from app.core.database import Base, engine
 
@@ -14,6 +16,7 @@ app = FastAPI(
     description="API Backend - Banque Zitouna",
     docs_url="/api/docs",
     redoc_url="/api/redoc"
+    
 )
 
 # CORS
@@ -31,12 +34,17 @@ app.add_middleware(
 
 # Include API router
 app.include_router(api_router, prefix="/api/v1")
+app.include_router(dispatch_router, prefix="/api/v1")
 
 @app.on_event("startup")
 async def startup():
     Base.metadata.create_all(bind=engine)
+    start_scheduler()   # ← ajouter
     logger.info(f"🚀 Starting {os.getenv('APP_NAME')} v{os.getenv('APP_VERSION')}")
 
+@app.on_event("shutdown")       # ← nouveau bloc à ajouter
+async def shutdown():
+    stop_scheduler()
 @app.get("/")
 async def root():
     return {

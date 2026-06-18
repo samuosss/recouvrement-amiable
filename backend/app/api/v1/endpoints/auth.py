@@ -185,7 +185,7 @@ def logout(
     Déconnecter l'utilisateur
     """
     blacklist_token(token)
-    
+        
     return {
         "message": "Déconnexion réussie",
         "detail": "Votre token a été révoqué"

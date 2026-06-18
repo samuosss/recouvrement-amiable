@@ -29,6 +29,7 @@ class DossierBase(BaseModel):
     # agent_id n'existe pas dans votre DB apparemment
 
 class DossierCreate(DossierBase):
+    date_ouverture: Optional[datetime] = None 
     pass
 
 class DossierUpdate(BaseModel):

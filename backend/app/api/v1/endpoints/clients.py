@@ -21,17 +21,13 @@ def get_clients(
     current_user: Utilisateur = Depends(get_current_active_user),
     db: Session = Depends(get_db)
 ):
-    """
-    Récupérer les clients selon les permissions
-    
-    Un utilisateur ne voit que les clients ayant des dossiers accessibles
-    """
-    # Récupérer les IDs des dossiers accessibles
-    dossiers_query = db.query(DossierClient.id_client).distinct()
+    # ✅ Query full model, not just the column
+    dossiers_query = db.query(DossierClient)
     dossiers_query = filter_dossiers_by_role(dossiers_query, current_user, db)
-    clients_accessibles = [d.id_client for d in dossiers_query.all()]
     
-    # Query clients
+    # ✅ Use set comprehension to deduplicate
+    clients_accessibles = list({d.id_client for d in dossiers_query.all()})
+    
     query = db.query(Client).filter(Client.id_client.in_(clients_accessibles))
     
     if search:
