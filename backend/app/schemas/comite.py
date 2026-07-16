@@ -74,6 +74,18 @@ class MembreResponse(BaseModel):
     class Config:
         from_attributes = True
 
+# ── Membre + comité imbriqué (pour /mes-invitations) ───────────────────────────
+class ComiteEmbed(BaseModel):
+    id_comite: int
+    instance: str
+    date_seance: Optional[datetime] = None
+    lieu: Optional[str] = None
+    class Config:
+        from_attributes = True
+
+class MonInvitationResponse(MembreResponse):
+    comite: Optional[ComiteEmbed] = None
+
 # ── Vote ──────────────────────────────────────────────────────────────────────
 class VoteCreate(BaseModel):
     vote: VoteEnum

@@ -3,6 +3,10 @@ comites.py — Router Comité avec fixes :
   1. GET /invitations/{membre_id} déplacé AVANT /{comite_id} (fix conflit de route)
   2. POST /{comite_id}/inviter envoie une notification in-app à l'invité
   3. GET /{comite_id}/votes/liste → retourne List[VoteResponse] pour récupérer myVote
+  4. FIX ROLES : _require_manager / _require_membre_accepte utilisent RoleEnum
+     au lieu de listes de strings bricolées (cause des 403 sur /inviter, /messages)
+  5. GET /mes-invitations → liste les invitations de l'utilisateur connecté,
+     avec le comité imbriqué (MonInvitationResponse) pour EspaceComite.tsx
 """
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -12,7 +16,7 @@ from datetime import datetime, timezone
 
 from app.core.database import get_db
 from app.core.security import get_current_active_user
-from app.models.utilisateur import Utilisateur
+from app.models.utilisateur import Utilisateur, RoleEnum
 from app.models.comite import (
     RoleComiteEnum, StatutComiteEnum, StatutInvitationEnum, ComiteMembre
 )
@@ -20,7 +24,8 @@ from app.schemas.comite import (
     ComiteCreate, ComiteUpdate, ComiteResponse,
     MembreInviteCreate, MembreRepondreCreate, MembreResponse,
     VoteCreate, VoteResponse, VoteTally,
-    MessageCreate, MessageResponse, InvitationDetail
+    MessageCreate, MessageResponse, InvitationDetail,
+    MonInvitationResponse,
 )
 from app.crud import comite as crud
 
@@ -31,9 +36,13 @@ router = APIRouter()
 # HELPERS
 # ═══════════════════════════════════════════════════════════════════════════════
 
+# FIX ROLES : on compare des RoleEnum, pas des strings bricolées.
+_MANAGER_ROLES = [RoleEnum.ADMIN, RoleEnum.DGA, RoleEnum.CHEF_AGENCE, RoleEnum.CHEF_REGIONAL]
+_ADMIN_ROLES   = [RoleEnum.ADMIN, RoleEnum.DGA]
+
+
 def _require_manager(user: Utilisateur):
-    allowed = ["Admin", "DGA", "Chef", "ADMIN", "DGA", "CHEF_AGENCE", "CHEF_REGIONAL"]
-    if user.role not in allowed:
+    if user.role not in _MANAGER_ROLES:
         raise HTTPException(status_code=403, detail="Accès réservé aux managers")
 
 
@@ -43,7 +52,7 @@ def _require_membre_accepte(comite_id: int, user: Utilisateur, db: Session):
         ComiteMembre.id_utilisateur == user.id_utilisateur,
         ComiteMembre.statut_invitation == StatutInvitationEnum.ACCEPTEE
     ).first()
-    if not membre and user.role not in ["Admin", "ADMIN"]:
+    if not membre and user.role not in _ADMIN_ROLES:
         raise HTTPException(status_code=403, detail="Vous n'êtes pas membre accepté de ce comité")
     return membre
 
@@ -71,7 +80,6 @@ def _send_notification(db: Session, *, destinataire_id: int, titre: str, message
 # BLOC 1 — ROUTES STATIQUES EN PREMIER (avant /{comite_id})
 # ═══════════════════════════════════════════════════════════════════════════════
 
-# ── ✅ FIX 1 : /invitations/{membre_id} AVANT /{comite_id} ───────────────────
 @router.get("/invitations/{membre_id}", response_model=MembreResponse)
 def get_invitation(
     membre_id: int,
@@ -85,7 +93,22 @@ def get_invitation(
     return invitation
 
 
-# ── Liste comités ──────────────────────────────────────────────────────────────
+@router.get("/mes-invitations", response_model=List[MonInvitationResponse])
+def get_mes_invitations(
+    statut: Optional[StatutInvitationEnum] = None,
+    current_user: Utilisateur = Depends(get_current_active_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Liste les invitations de comité de l'utilisateur connecté, tous comités confondus.
+    Utilisé par EspaceComite.tsx pour afficher un vrai panneau "Mes invitations"
+    (au lieu du mockup statique précédent). Le comité est imbriqué (instance,
+    date_seance, lieu) via MonInvitationResponse.
+    Par défaut retourne tout ; passer ?statut=En_attente pour ne voir que les en attente.
+    """
+    return crud.get_invitations_utilisateur(db, current_user.id_utilisateur, statut)
+
+
 @router.get("/", response_model=List[ComiteResponse])
 def get_comites(
     skip: int = 0,
@@ -96,7 +119,6 @@ def get_comites(
     return crud.get_comites(db, skip=skip, limit=limit)
 
 
-# ── Créer comité ───────────────────────────────────────────────────────────────
 @router.post("/", response_model=ComiteResponse, status_code=status.HTTP_201_CREATED)
 def create_comite(
     comite: ComiteCreate,
@@ -189,7 +211,6 @@ def inviter_membre(
 
     membre = crud.inviter_membre(db, comite_id, invite)
 
-    # ✅ FIX 2 : notification in-app à l'invité avec lien vers sa page invitation
     _send_notification(
         db,
         destinataire_id=invite.id_utilisateur,
@@ -278,7 +299,6 @@ def get_tally(
     return crud.get_tally(db, comite_id)
 
 
-# ✅ FIX 3 : nouvelle route /votes/liste → List[VoteResponse] pour récupérer myVote
 @router.get("/{comite_id}/votes/liste", response_model=List[VoteResponse])
 def get_votes_liste(
     comite_id: int,

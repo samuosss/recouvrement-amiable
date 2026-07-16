@@ -29,6 +29,7 @@ class DossierClient(Base, TimestampMixin):
     date_derniere_action = Column(DateTime(timezone=True))
     notes = Column(String)
     
+    
     # Relations
     client = relationship("Client", backref="dossiers")
     

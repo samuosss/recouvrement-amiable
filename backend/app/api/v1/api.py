@@ -20,7 +20,8 @@ from app.api.v1.endpoints import (
     reponses_clients,
     comites,
     nlp,
-    analytics
+    analytics,
+    scoring
 )
 
 api_router = APIRouter()
@@ -49,4 +50,8 @@ api_router.include_router(reponses_clients.router, prefix="/reponses-clients", t
 api_router.include_router(comites.router, prefix="/comites", tags=["comités"])
 api_router.include_router(nlp.router, prefix="/nlp", tags=["NLP"])
 api_router.include_router(analytics.router, prefix="/analytics", tags=["analytics"])
+api_router.include_router(scoring.router, prefix="/scoring", tags=["Scoring"])
+
+
+
     

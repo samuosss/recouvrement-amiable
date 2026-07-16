@@ -20,11 +20,8 @@ bcrypt==3.2.2
 apscheduler==3.11.2
 jinja2==3.1.6
 africastalking==2.0.2
-africastalking==2.0.2
-apscheduler==3.11.2
-jinja2==3.1.6
-
 mailtrap
-africastalking==2.0.2
-apscheduler==3.11.2
-jinja2==3.1.6
+scikit-learn==1.9.0
+xgboost==2.1.1
+pandas==2.2.2
+joblib==1.4.2

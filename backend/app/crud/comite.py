@@ -250,3 +250,24 @@ def get_invitation_by_id(db: Session, membre_id: int) -> Optional[ComiteMembre]:
         joinedload(ComiteMembre.utilisateur),
         joinedload(ComiteMembre.comite)
     ).filter(ComiteMembre.id == membre_id).first()
+# ── ✅ NOUVEAU : invitations d'un utilisateur (toutes comités confondus) ───────
+def get_invitations_utilisateur(
+    db: Session,
+    utilisateur_id: int,
+    statut: Optional[StatutInvitationEnum] = None,
+) -> List[ComiteMembre]:
+    """
+    Liste toutes les invitations (ComiteMembre) d'un utilisateur, tous comités
+    confondus. Utilisé par GET /comites/mes-invitations pour que chaque
+    utilisateur (agent, chef d'agence, chef régional...) puisse voir ses
+    propres invitations, pas seulement l'admin qui les a créées.
+    """
+    q = db.query(ComiteMembre).options(
+        joinedload(ComiteMembre.utilisateur),
+        joinedload(ComiteMembre.comite),
+    ).filter(ComiteMembre.id_utilisateur == utilisateur_id)
+
+    if statut:
+        q = q.filter(ComiteMembre.statut_invitation == statut)
+
+    return q.order_by(ComiteMembre.created_at.desc()).all()
